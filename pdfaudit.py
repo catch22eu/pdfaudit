@@ -498,7 +498,7 @@ def readarguments():
 	parser.add_argument('-c', action='version', help='show copyright', version=apcopyright)
 	args = parser.parse_args()
 	if os.path.isfile(args.filename):
-		return args.filename, args.v
+		return args.filename, args.d
 	else:
 		print("File not found")
 		sys.exit()
