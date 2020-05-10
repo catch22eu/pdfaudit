@@ -17,19 +17,9 @@
 #    along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #
 
-
 import os		# only used for checking file size, and file existance
 import sys		# for aborting, getting/setting recursion limit
 import argparse # ...
-
-#infile="pdf_testsamples.txt"
-#infile="Programming/EssentialC.pdf"
-#infile="The Inevitable - Kevin Kelly.pdf"
-#infile="Disrupted - Dan Lyons.pdf"
-#infile="Disrupted - Dan Lyons_decompress.pdf"
-#infile="HTML5.Programming.with.JavaScript.For.Dummies.pdf"
-#infile="50 Assorted Magazines - February 08 2019/The MagPi – February 2019.pdf"
-#infile="../analyzing-malicious-document-files.pdf"
 
 apversion='''pdfaudit v0.1'''
 apdescription='''pdfaudit is a pdf auditing tool for security and privacy'''
