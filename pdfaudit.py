@@ -17,9 +17,13 @@
 #    along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #
 
-import os		# only used for checking file size, and file existance
-import sys		# for aborting, getting/setting recursion limit
-import argparse # ...
+import os							# only used for checking file size, and file existance
+import sys							# for aborting, getting/setting recursion limit
+import argparse 					# ...
+import zlib							# at least for flatedecode
+from ascii85 import ascii85decode 	# for decoding
+from lzw import lzwdecode			# for decoding
+from ccitt import ccittfaxdecode	# for decoding
 
 apversion='''pdfaudit v0.1'''
 apdescription='''pdfaudit is a pdf auditing tool for security and privacy'''
@@ -68,13 +72,9 @@ You should have received a copy of the GNU General Public License
 along with this program.  If not, see <https://www.gnu.org/licenses/>.
 '''
 
-#"pdfaudit is a command-line tool analyze pdf files for security and privacy\n\n"
-
-
 whitespacelist = [0, 9, 10, 12, 13, 32] # per pdf specification
 delimiterlist = [40, 41, 60, 62, 91, 93, 123, 125, 47] # ()<>[]{}/
 newlinelist = [13, 10] # CR, LF
-riskeykyes = ['OpenAction', 'AA', 'JavaScript', 'JS', 'GoTo', 'Launch', 'URI', 'SubmitForm', 'GoToR', 'RichMedia', 'ObjStm']
 followlinkslist = ['Length', 'Size', 'Prev']
 counttable = {}
 crossreflist = {}
@@ -84,26 +84,28 @@ currentobject = ''
 globaldictvaluesize = 0
 prevxref = 0
 riskydictionary = {
-	('S','GoTo')      : 'D',
+	('S','GoTo')      : 'D', # TODO: remove?
 	('S','GoToR')     : 'F',
 	('S','GoToE')     : 'F',
-	('S','Launch')    : ('F','Win','Mac','Unix'),
+	('S','Launch')    : ('F','Win','Mac','Unix'), # TODO: list not yet implemented
 	('S','URI')       : 'URI',
 	('S','SumbitForm'): 'F',
 	('S','JavaScript'): 'JS',
-#	('OpenAction','') : '',
-#	('AA','')         : '',
-	('Type','ObjStm') : '' # TODO: TBD
+#	('OpenAction','') : '', # TODO
+#	('AA','')         : '', # TODO
+	('Type','ObjStm') : 'Stream'
 	}
 
-#todo: consider / check applicability of:
+#TODO: consider / check applicability of:
 #with open(filename, 'rb') as file:
 #    for byte in iter(lambda: file.read(1), b''):
 #        # Do stuff with byte
 #
-
+#TODO: translate to OOP in general
+#TODO: get rid of global variables
 
 def noteof(file):
+	#TODO: does this cause performance issues; it gets called reading each charcter
 	return file.tell() < os.path.getsize(infile)
 
 def iswhitespace(char):
@@ -131,7 +133,7 @@ def getword(file):
 	delimiter=False
 	while not delimiter and noteof(file):
 		singlebyte = file.read(1)
-		vprint("{POS: "+str(file.tell())+", value: "+str(singlebyte[0])+", stringempty: +"+str(foundword==""), 3)
+		vprint("{POS: "+str(file.tell()-1)+", value: "+str(singlebyte[0])+", stringempty: +"+str(foundword==""), 3)
 		delimiter = (singlebyte[0] in whitespacelist + delimiterlist)
 		if foundword == "" and singlebyte[0] in whitespacelist:
 			# ignore trailing whitespaces
@@ -162,19 +164,28 @@ def getnexttwowords(file):
 	file.seek(startpos)
 	return foundword1, foundword2
 
+def dictionaryappendlist(dictionary,key,value):
+	if key in dictionary:
+		dictionary[key].append(value)
+	else:
+		dictionary[key]=[value]
+	return dictionary
+
 def checkdictionary(dictionary):
 # builds a dictionary of keys found to be risky. New keys are added in the dictionary as new key/object pairs, or an object is appended to already existing key/object pair(s) 
 	global currentobject
 	global counttable
 	for i in list(dictionary.keys()):
 		keyvaluepair = (i,dictionary.get(i))
-		if keyvaluepair in list(riskydictionary.keys()):
-			objectandvalue = (dictionary.get(i),dictionary.get(riskydictionary.get((i,dictionary.get(i)))))
-			print(objectandvalue)
-#			if dictionary.get(i) not in counttable.keys():
-#				counttable[key]=[objectandvalue]
-#			elif currentobject not in counttable[key]:
-#				counttable[key].append(objectandvalue)
+		keyvaluepairempty = (i,"")
+		# TODO: incorrect below, and we can make use of the fact that dict.get() returns none if the key is not found
+		if keyvaluepair in list(riskydictionary.keys()) or keyvaluepairempty in list(riskydictionary.keys()):
+			objectandvalue = (	currentobject,
+								dictionary.get(riskydictionary.get(keyvaluepair,""),"")+
+								dictionary.get(riskydictionary.get(keyvaluepairempty,""),""))
+			key=keyvaluepair[1]
+			dictionaryappendlist(counttable,key,objectandvalue)
+#			print(key,objectandvalue) #DEBUG
 
 def getdictionary(file,followlinks=False):
 # sequence of key - object pairs, of which at least the key is a /name (without slash)
@@ -200,16 +211,42 @@ def getdictionary(file,followlinks=False):
 			if isnum(getobject): # can something else than a number
 				prevxref = int(getobject) # TODO: from global variable to return'd value from this function
 			vprint("[Prevxref]: "+str(prevxref),2)
-	checkdictionary(dictionary)
 	nword, nnword = getnexttwowords(file)
 	if nword == 'stream':
-		getword(file) # /Length is the number of bytes from the beginning of the line following the keyword stream
 		#TODO: followsymlinks handling in case stream can have symlinks
+		getword(file) # actually read the word 'stream' (including trailing delimiter)
+		file.seek(-1,1) #stream follows after 'stream\r\n' or 'stream\n'
+		if nextchar(file) == '\n': 
+			file.read(1) # it was 'stream\n'
+		else:
+			file.read(2) # it was 'stream\r\n'
+		stream=file.read(length)
 		vprint("[STREAM] "+str(length)+" bytes",2)
-		file.seek(length,1)
+		if "Filter" in list(dictionary.keys()):
+			for streamfilter in dictionary.get("Filter").split():
+				if streamfilter == "FlateDecode":
+					vprint("[FILTER]: "+streamfilter,2)
+					stream=zlib.decompress(stream)
+					vprint(stream,3)
+				elif streamfilter == 'ASCII85Decode':
+					vprint("[FILTER]: "+streamfilter,2)
+					stream=ascii85decode(stream)
+				elif streamfilter == 'LZWDecode':
+					vprint("[FILTER]: "+streamfilter,2)
+					stream=lzwdecode(stream)
+#				elif streamfilter == 'CCITTFaxDecode':
+#					vprint("[FILTER]: "+streamfilter,2)
+#					ccittfaxdecode(stream) #TODO: needs additional arguments
+				elif streamfilter == '/':
+					pass
+				else:
+					vprint("[FILTER NOT IMPLEMENTED]: "+streamfilter,1)
+					# TODO: need to break here if multiple compressions are used of which one fails to prevent error out. 
 		getword(file) # the word endstream
+		dictionary["Stream"]=stream.decode('utf-8','ignore')
 		#TODO: followsymlinks handling in case stream can have symlinks
 	vprint("[DICT: end]",2)
+	checkdictionary(dictionary)
 	return dictionary # TODO: check if we can return more here
 		
 def translatestring(string):
@@ -390,7 +427,7 @@ def readindirectobject(file):
 			return foundword
 
 def showthreats():
-#	print(counttable)
+#	print(counttable) #DEBUG
 	for i in list(counttable.keys()):	
 		for j in list(counttable.get(i)):
 			objectstring = str(j[0][0])+" "+str(j[0][1])
