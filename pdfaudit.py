@@ -76,13 +76,12 @@ whitespacelist = [0, 9, 10, 12, 13, 32] # per pdf specification
 delimiterlist = [40, 41, 60, 62, 91, 93, 123, 125, 47] # ()<>[]{}/
 newlinelist = [13, 10] # CR, LF
 followlinkslist = ['Length', 'Size', 'Prev']
+readobjectdefaultlist = ['true', 'false', 'endobj', '>', ']', 'null']
 counttable = {}
 crossreflist = {}
 scannedobjects = {}
 verbosity = 1 # 0 minimal, 1 default, 2 detail, 3 debug
 currentobject = ''
-globaldictvaluesize = 0
-prevxref = 0
 riskydictionary = {
 	('S','GoTo')      : 'D', # TODO: remove?
 	('S','GoToR')     : 'F',
@@ -124,6 +123,17 @@ def nextchar(file):
 def vprint(string,verbositylevel=1,delimiter='\n'):
 	if verbositylevel <= verbosity:
 		print(string, end=delimiter)
+
+def halt(message=""):
+	sys.exit("EXIT"+message)
+
+def num(s):
+	if isinstance(s,str):
+		return int(s)
+	elif isinstance(s,tuple):
+		return int(s[0])
+	else:
+		halt("[Error converting object to number]")
 
 def getword(file):
 # Return next word or next delimiter
@@ -181,8 +191,8 @@ def checkdictionary(dictionary):
 		# TODO: incorrect below, and we can make use of the fact that dict.get() returns none if the key is not found
 		if keyvaluepair in list(riskydictionary.keys()) or keyvaluepairempty in list(riskydictionary.keys()):
 			objectandvalue = (	currentobject,
-								dictionary.get(riskydictionary.get(keyvaluepair,""),"")+
-								dictionary.get(riskydictionary.get(keyvaluepairempty,""),""))
+								"".join(dictionary.get(riskydictionary.get(keyvaluepair,""),""))+
+								"".join(dictionary.get(riskydictionary.get(keyvaluepairempty,""),"")))
 			key=keyvaluepair[1]
 			dictionaryappendlist(counttable,key,objectandvalue)
 #			print(key,objectandvalue) #DEBUG
@@ -192,28 +202,19 @@ def getdictionary(file,followlinks=False):
 # it may be followed by a stream, which is encapsulated by the words "stream" and "endstream"
 # TODO: handling of specific keys and return values (Length, Size): from global to variables to returns from this function (as this function may be called recursively)
 	global globaldictvaluesize # TODO: from global variable to return'd value from this function
-	global prevxref # TODO: from global variable to return'd value from this function
 	vprint("[DICT]", 2, '')
 	getkey = ""
 	getobject = ""
 	dictionary = {}
 	while getkey != '>' and getobject != '>':
-		getkey = readobject(file).get("SingleString")
-		getobject = readobject(file,getkey=='Length').get("SingleString") # TODO: a bit of a hack, but we want to follow links here to get the length value if it's stored by a referenced object (per pdf spec)
+		getkey = readobject(file)#.get("SingleString")
+		getobject = readobject(file,getkey=='Length')#.get("SingleString") # TODO: a bit of a hack, but we want to follow links here to get the length value if it's stored by a referenced object (per pdf spec)
 		dictionary[getkey] = getobject # First step to get rid of globals, and return a dictionary
-		vprint("[KEY,OBJECT]: "+getkey+", "+getobject+" ",2)
-		if getkey == 'Length': # for streams
-			length = int(getobject)
-			vprint("[Length]: "+str(length),2)
-		elif getkey == 'Size': # for trailer
-			globaldictvaluesize = int(getobject) # TODO: from global variable to return'd value from this function
-		elif getkey == 'Prev': # previous xref start. TODO: can also be used elsewhere
-			if isnum(getobject): # can something else than a number
-				prevxref = int(getobject) # TODO: from global variable to return'd value from this function
-			vprint("[Prevxref]: "+str(prevxref),2)
+#		vprint("[KEY,OBJECT]: "+getkey+", "+getobject+" ",2) #TODO: remove/adapt: getobject can be something else than string
 	nword, nnword = getnexttwowords(file)
 	if nword == 'stream':
 		#TODO: followsymlinks handling in case stream can have symlinks
+		length=num(dictionary.get("Length"))
 		getword(file) # actually read the word 'stream' (including trailing delimiter)
 		file.seek(-1,1) #stream follows after 'stream\r\n' or 'stream\n'
 		if nextchar(file) == '\n': 
@@ -223,7 +224,10 @@ def getdictionary(file,followlinks=False):
 		stream=file.read(length)
 		vprint("[STREAM] "+str(length)+" bytes",2)
 		if "Filter" in list(dictionary.keys()):
-			for streamfilter in dictionary.get("Filter").split():
+			filterlist = dictionary.get("Filter")
+			if isinstance(filterlist,str):
+				filterlist=[filterlist]
+			for streamfilter in list(filterlist):
 				if streamfilter == "FlateDecode":
 					vprint("[FILTER]: "+streamfilter,2)
 					stream=zlib.decompress(stream)
@@ -243,7 +247,11 @@ def getdictionary(file,followlinks=False):
 					vprint("[FILTER NOT IMPLEMENTED]: "+streamfilter,1)
 					# TODO: need to break here if multiple compressions are used of which one fails to prevent error out. 
 		getword(file) # the word endstream
-		dictionary["Stream"]=stream.decode('utf-8','ignore')
+		if dictionary.get("Type")=="XRef":
+			vprint("[XRef]",2)
+			dictionary["Stream"]=stream
+		else:
+			dictionary["Stream"]=stream.decode('utf-8','ignore')
 		#TODO: followsymlinks handling in case stream can have symlinks
 	vprint("[DICT: end]",2)
 	checkdictionary(dictionary)
@@ -295,26 +303,16 @@ def gethexstring(file):
 	return hexstring
 
 def getarray(file):
-# Sequence of objects, []
+# returns single object or a list of objects
 	vprint("[ARRAY]",2)
-	foundarray=""
+	foundarray=[]
 	while ']' not in foundarray:
-#		foundarray += readobject(file,followlinks=False)
-		foundarray += getword(file)
-		foundarray += ' ' # TODO: can be more elegantly: combine with previous, [:-2] with next
-	foundarray = foundarray[:-2]
-#	if isnum(foundarray):
-#		print('jep, single number found here!')
-#		return num(foundarray)
-#	else:
-	return foundarray
-
-def num(s):
-#https://stackoverflow.com/questions/379906/how-do-i-parse-a-string-to-a-float-or-int
-	try:
-		return int(s)
-	except ValueError:
-		return float(s)
+		foundarray.append(readobject(file,followlinks=False))
+	foundarray = foundarray[:-1]
+	if len(foundarray)==1:
+		return foundarray[0]
+	else:
+		return foundarray
 
 def isnum(checkword):
 #https://stackoverflow.com/questions/354038/how-do-i-check-if-a-string-is-a-number-float
@@ -343,7 +341,7 @@ def jumptoobject(file,objectnum,generation):
 		key=num(objectnum),num(generation)
 		vprint('[JUMPTO:'+objectnum+','+generation+']',2)
 		file.seek(getobjectpos(key))
-		foundvalue = readindirectobject(file).get('SingleString')
+		foundvalue = readindirectobject(file)#.get('SingleString')
 		file.seek(startpos)
 		scannedobjects[key]=foundvalue
 		return foundvalue
@@ -360,31 +358,23 @@ def readcomment(file):
 	return comment
 
 def readobject(file,followlinks=False):
+#returns either a string, an array of objects, or a dictionary
 #TODO: difference between < something, << something, <something
 #TODO: stream which contains the word "endstream"
 #TODO: this function is called from more than one location, but not every objct type is expected in each case. Implement warning for those unexpected cases.
 #TODO: check correctness of handling: abc<def> vs abd<<def>> 	pword=""
-	dictionary = {}
 	foundword = getword(file)
 	vprint(foundword,3)
-	if foundword == 'true' or foundword == 'false': # boolean
-		pass
-	elif foundword == 'endobj':
-		pass
-	elif foundword == '<' and nextchar(file) == '<': # "<<"
-		singlebyte = file.read(1)	# need to read next byte, as nextchar didn't progress
-		getdictionary(file,followlinks)
-		foundword = "<>"
-	elif foundword == '<': # "<" note: depends on previous elif
-		foundword = gethexstring(file)
+	if foundword == '<':
+		if nextchar(file) == '<':
+			singlebyte = file.read(1)
+			return getdictionary(file,followlinks)
+		else:
+			return gethexstring(file)
 	elif foundword == '(':
-		foundword = getliteralstring(file)
-	elif foundword == '>':
-		pass
+		return getliteralstring(file)
 	elif foundword == '[':
-		foundword = getarray(file)
-	elif foundword == ']':
-		pass
+		return getarray(file)
 	elif isnum(foundword):
 		nword, nnword = getnexttwowords(file)
 		if isnum(nword) and nnword == 'R':
@@ -396,16 +386,15 @@ def readobject(file,followlinks=False):
 				foundword = foundword+' '+nword+' '+nnword
 		else:
 			vprint("[NUM]:"+foundword,2)
+		return foundword
 	elif ord(foundword[0]) == 47: # "/"
-		foundword = getname(file)
-	elif foundword == 'null':
-		pass
+		return getname(file)
+	elif foundword in readobjectdefaultlist:
+		return foundword
 	else:
 		vprint("[ERROR: unexpected end of object] found: "+foundword,0)
 		sys.exit(0)
 		foundword = ""
-	dictionary["SingleString"]=foundword
-	return dictionary
 
 def readindirectobject(file):
 	ppword=""
@@ -419,10 +408,13 @@ def readindirectobject(file):
 		if foundword == 'obj':
 			vprint("[OBJ:"+ppword+","+pword+"]",2 , '')
 			return readobject(file)
-		elif foundword == 'endobj':
+		elif foundword =='trailer':
+			vprint("[TRAILER]",2)
+			return readobject(file)
+		elif foundword == 'endobj': #TODO: do we ever reach this? consider deleting
 			vprint("[ENDOBJ]",2)
 			return foundword
-		elif foundword == 'endstream':
+		elif foundword == 'endstream': #TODO: do we ever reach this? consider deleting
 			vprint("[ENDSTREAM]",2)
 			return foundword
 
@@ -458,19 +450,6 @@ def getxref(file):
 	numberofobjects = len(crossreflist)
 	vprint("Number of objects: "+ str(numberofobjects)) 
 	vprint("[XREF: End]",2)
-
-def readtrailer(file):
-	vprint("[TRAILER]",2)
-	currentprevxref = prevxref
-	readobject(file, False) # read trailer, expected as dictionary
-	vprint("[TRAILER: size]: "+str(globaldictvaluesize),2)
-	if currentprevxref != prevxref:
-		vprint("[TRAILER: previous xref pos]: "+str(prevxref),2)
-#		getxrefandtrailer(file,prevxref)
-		return prevxref
-	else:
-		return 0
-	vprint("[TRAILER: End]",2)
 
 def findstartback(file,startstring):
 	filepos=-3
@@ -511,12 +490,11 @@ def readpdf(file,startxrefpos):
 # Main principle is to first read the trailer and recurse to the previous version of the pdf, then read the xref table, then read all objects from the pdf version we're handling
 	file.seek(startxrefpos)
 	foundword=''
-	while foundword != 'trailer' and noteof(file): # doesn't check if next trailer is read instead
-		foundword = getword(file)
-	previousstartxrefpos = readtrailer(file)
-	if previousstartxrefpos != 0:
+	dictionary=readindirectobject(file)
+	if dictionary.get("Prev",0) != 0:
+		vprint("[Prevxref]: "+dictionary.get("Prev"),2)
 		vprint("Reading previous version of pdf",1)
-		readpdf(file,previousstartxrefpos)
+		readpdf(file,num(dictionary.get("Prev")))
 	file.seek(startxrefpos) # need to get back to the beginning of the xref, since we read trailer
 	if getword(file)=='xref': # TODO: also move if / else to getxref, like gettrailer
 		getxref(file)
