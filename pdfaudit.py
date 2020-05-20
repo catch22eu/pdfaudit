@@ -25,7 +25,7 @@ from ascii85 import ascii85decode 	# for decoding
 from lzw import lzwdecode			# for decoding
 from ccitt import ccittfaxdecode	# for decoding
 
-apversion='''pdfaudit v0.1'''
+apversion='''pdfaudit v0.2'''
 apdescription='''pdfaudit is a pdf auditing tool for security and privacy'''
 apepilog='''pdfaudit Copyright (C) 2020 Joseph Heller
 This program comes with ABSOLUTELY NO WARRANTY; for details type use '-w'.
@@ -230,7 +230,10 @@ def getdictionary(file,followlinks=False):
 			for streamfilter in list(filterlist):
 				if streamfilter == "FlateDecode":
 					vprint("[FILTER]: "+streamfilter,2)
-					stream=zlib.decompress(stream)
+					try:
+						stream=zlib.decompress(stream)
+					except:
+						vprint("Decompression error FlateDecode",0)
 					vprint(stream,3)
 				elif streamfilter == 'ASCII85Decode':
 					vprint("[FILTER]: "+streamfilter,2)
@@ -499,8 +502,59 @@ def readpdf(file,startxrefpos):
 	if getword(file)=='xref': # TODO: also move if / else to getxref, like gettrailer
 		getxref(file)
 		vprint(list(crossreflist.keys())[0],3)
-	else:
-		vprint("[Error: xref not found]",0)
+	else: # assume to read a cross reference stream
+		vprint("[XREF Stream]",2)
+		xrefdictionary=readindirectobject(file)
+#		print(xrefdictionary)
+		stream=xrefdictionary.get("Stream")
+		w=xrefdictionary.get("W")
+		w=[num(w[0]), num(w[1]), num(w[2])]
+#		print(w)
+		n=sum(w)
+		if num(xrefdictionary.get("DecodeParms").get("Predictor","0"))>1:
+			predictor=True
+			fieldstart=1
+			vprint("[Predictor]",2)
+			n+=1
+		else:
+			fieldstart=0
+		objectlist = [stream[i:i+n] for i in range(0, len(stream), n)] # list comprehension
+		vprint("[XREF Stream objects]: "+xrefdictionary.get("Size"),2)
+		predictorlist=[i[0] for i in objectlist] # list comprehension
+		fieldlist=[i[fieldstart:n] for i in objectlist] # list comprehension
+#		print(fieldlist) # DEBUG
+		xreflist=[]
+		for field in list(fieldlist):
+			entry=[]
+			for i in range(len(w)):
+				fstart=sum(w[0:i])
+				fend=sum(w[0:i])+w[i]
+				entry.append(int.from_bytes(field[fstart:fend],byteorder='big', signed=False))
+			xreflist.append(entry)
+		if predictor:
+			for i in range(len(xreflist)-1):
+#				print(xreflist[i]) #DEBUG
+				if predictorlist[i+1]==2:
+					xreflist[i+1]=list(map(lambda x,y:x+y, xreflist[i], xreflist[i+1]))
+				else:
+					halt("XREF Stream predictor not implemented")
+#		print(xreflist)
+		# TODO: implement reading and using Index (first object number and number of entries), defaults to [0 size]
+		cmprobjdet=False
+		for i in range(len(xreflist)): #TODO: this is the same as regular xref handling; combine?
+			objectgen=xreflist[i][2]
+			objectoffset=xreflist[i][1]
+			if xreflist[i][0]==1: # e.g. 'n'
+				crossreflist[i,objectgen]=objectoffset
+				# this either inserts a new key, or updates an existing one.
+			elif xreflist[i][0]==0: # 'f'
+				if (i,objectgen) in list(crossreflist.keys()): #should normally be the case
+					del crossreflist[i,objectgen-1] # per pdf spec: generations are incremented by 1
+			else:
+				cmprobjdet=True
+		if cmprobjdet is True:
+			vprint("[XREF Stream]: compressed objects not supported",1)
+#		halt()
 	iteratexref(file)
 	vprint("Finished reading pdf version",1)
 
