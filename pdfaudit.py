@@ -25,7 +25,7 @@ from ascii85 import ascii85decode 	# for decoding
 from lzw import lzwdecode			# for decoding
 from ccitt import ccittfaxdecode	# for decoding
 
-apversion='''pdfaudit v0.2'''
+apversion='''pdfaudit v0.3'''
 apdescription='''pdfaudit is a pdf auditing tool for security and privacy'''
 apepilog='''pdfaudit Copyright (C) 2020 Joseph Heller
 This program comes with ABSOLUTELY NO WARRANTY; for details type use '-w'.
@@ -79,6 +79,7 @@ followlinkslist = ['Length', 'Size', 'Prev']
 readobjectdefaultlist = ['true', 'false', 'endobj', '>', ']', 'null']
 counttable = {}
 crossreflist = {}
+crossreflistcompressed = {}
 scannedobjects = {}
 verbosity = 1 # 0 minimal, 1 default, 2 detail, 3 debug
 currentobject = ''
@@ -92,7 +93,7 @@ riskydictionary = {
 	('S','JavaScript'): 'JS',
 #	('OpenAction','') : '', # TODO
 #	('AA','')         : '', # TODO
-	('Type','ObjStm') : 'Stream'
+#	('Type','ObjStm') : 'Stream' # Not seen as a risk, we iterate through the stream
 	}
 
 #TODO: consider / check applicability of:
@@ -141,9 +142,17 @@ def getword(file):
 # TODO: check overall corectness ans efficiency of the if / elif flow
 	foundword= ""
 	delimiter=False
-	while not delimiter and noteof(file):
+	while not delimiter:
 		singlebyte = file.read(1)
-		vprint("{POS: "+str(file.tell()-1)+", value: "+str(singlebyte[0])+", stringempty: +"+str(foundword==""), 3)
+		if singlebyte == b'': # EOF
+			return ''
+		if verbosity > 2:
+			vprint("{POS: "+
+				str(file.tell()-1)+
+				", value: "+
+				str(singlebyte[0])+
+				", stringempty: +"+
+				str(foundword==""), 3)
 		delimiter = (singlebyte[0] in whitespacelist + delimiterlist)
 		if foundword == "" and singlebyte[0] in whitespacelist:
 			# ignore trailing whitespaces
@@ -247,12 +256,22 @@ def getdictionary(file,followlinks=False):
 				elif streamfilter == '/':
 					pass
 				else:
-					vprint("[FILTER NOT IMPLEMENTED]: "+streamfilter,1)
+					vprint("Filter not implemented: "+streamfilter,1)
 					# TODO: need to break here if multiple compressions are used of which one fails to prevent error out. 
 		getword(file) # the word endstream
 		if dictionary.get("Type")=="XRef":
 			vprint("[XRef]",2)
 			dictionary["Stream"]=stream
+		elif dictionary.get("Type")=="ObjStm":
+			vprint("[STREAM]: open ObjStm",2)
+			f=open(".pdfaudit","w+b")
+			f.write(stream)
+			f.write(bytearray([13,13,13]))
+			f.seek(0)
+			iterateobjstm(f,num(dictionary.get("N")))
+			f.close()
+			#TODO: delete file
+			vprint("[STREAM]: close ObjStm",2)
 		else:
 			dictionary["Stream"]=stream.decode('utf-8','ignore')
 		#TODO: followsymlinks handling in case stream can have symlinks
@@ -260,6 +279,15 @@ def getdictionary(file,followlinks=False):
 	checkdictionary(dictionary)
 	return dictionary # TODO: check if we can return more here
 		
+def iterateobjstm(file,n):
+	for i in range(n):
+		objectnumber = getword(file)
+		byteoffset = getword(file)
+		vprint(objectnumber+" "+byteoffset+" ",2,"")
+	for i in range(n):
+		vprint("[ObjStm Object]: "+str(i),2)
+		readobject(file)
+
 def translatestring(string):
 # to be translated: \ddd, \n, \r, \t, \f, \b, \\, 
 # to be ignored   : \ (otherwise)
@@ -354,7 +382,7 @@ def readcomment(file):
 	comment = ''
 	notnewline = True
 	while notnewline and noteof(file):
-		singlebyte = file.read(1)
+		singlebyte = file.read(1) # TODO: file.read(1) returns b'' if EOF reached, so singlebyte[0] does not exist
 		comment += chr(singlebyte[0])
 		notnewline = singlebyte[0] not in newlinelist
 	vprint("[COMMENT:]"+comment,2)
@@ -450,8 +478,6 @@ def getxref(file):
 			vprint(str(i)+str(objectoffset)+str(objectgen)+str(objectinuse),3)
 		startobj, countobj = getnexttwowords(file)
 	vprint(crossreflist,2)
-	numberofobjects = len(crossreflist)
-	vprint("Number of objects: "+ str(numberofobjects)) 
 	vprint("[XREF: End]",2)
 
 def findstartback(file,startstring):
@@ -482,6 +508,7 @@ def getpdfversion(file):
 def iteratexref(file):
 	j=0
 	global currentobject
+	vprint("Number of objects: "+ str(len(crossreflist))) 
 	for i in list(crossreflist.keys()):
 		vprint("[XREFITER]:"+str(i),2)
 		currentobject=i
@@ -511,13 +538,14 @@ def readpdf(file,startxrefpos):
 		w=[num(w[0]), num(w[1]), num(w[2])]
 #		print(w)
 		n=sum(w)
-		if num(xrefdictionary.get("DecodeParms").get("Predictor","0"))>1:
-			predictor=True
-			fieldstart=1
-			vprint("[Predictor]",2)
-			n+=1
-		else:
-			fieldstart=0
+		predictor=False
+		fieldstart=0
+		if "DecodeParms" in list(xrefdictionary.keys()):
+			if num(xrefdictionary.get("DecodeParms").get("Predictor","0"))>1:
+				predictor=True
+				fieldstart=1
+				vprint("[Predictor]",2)
+				n+=1
 		objectlist = [stream[i:i+n] for i in range(0, len(stream), n)] # list comprehension
 		vprint("[XREF Stream objects]: "+xrefdictionary.get("Size"),2)
 		predictorlist=[i[0] for i in objectlist] # list comprehension
@@ -540,7 +568,6 @@ def readpdf(file,startxrefpos):
 					halt("XREF Stream predictor not implemented")
 #		print(xreflist)
 		# TODO: implement reading and using Index (first object number and number of entries), defaults to [0 size]
-		cmprobjdet=False
 		for i in range(len(xreflist)): #TODO: this is the same as regular xref handling; combine?
 			objectgen=xreflist[i][2]
 			objectoffset=xreflist[i][1]
@@ -550,11 +577,12 @@ def readpdf(file,startxrefpos):
 			elif xreflist[i][0]==0: # 'f'
 				if (i,objectgen) in list(crossreflist.keys()): #should normally be the case
 					del crossreflist[i,objectgen-1] # per pdf spec: generations are incremented by 1
+			elif xreflist[i][0]==2: # compressed objects list
+				pass
+#				crossreflistcompressed[objectoffset,objectgen]=
 			else:
-				cmprobjdet=True
-		if cmprobjdet is True:
-			vprint("[XREF Stream]: compressed objects not supported",1)
-#		halt()
+				pass
+#				halt("Unexpected type found reading cross reference stream")
 	iteratexref(file)
 	vprint("Finished reading pdf version",1)
 
