@@ -25,7 +25,7 @@ from ascii85 import ascii85decode 	# for decoding
 from lzw import lzwdecode			# for decoding
 from ccitt import ccittfaxdecode	# for decoding
 
-apversion='''pdfaudit v0.3'''
+apversion='''pdfaudit v0.4'''
 apdescription='''pdfaudit is a pdf auditing tool for security and privacy'''
 apepilog='''pdfaudit Copyright (C) 2020 Joseph Heller
 This program comes with ABSOLUTELY NO WARRANTY; for details type use '-w'.
@@ -75,7 +75,7 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 whitespacelist = [0, 9, 10, 12, 13, 32] # per pdf specification
 delimiterlist = [40, 41, 60, 62, 91, 93, 123, 125, 47] # ()<>[]{}/
 newlinelist = [13, 10] # CR, LF
-followlinkslist = ['Length', 'Size', 'Prev']
+followlinkslist = ['Length', 'S'] # Need to follow links in these cases
 readobjectdefaultlist = ['true', 'false', 'endobj', '>', ']', 'null']
 counttable = {}
 crossreflist = {}
@@ -84,16 +84,16 @@ scannedobjects = {}
 verbosity = 1 # 0 minimal, 1 default, 2 detail, 3 debug
 currentobject = ''
 riskydictionary = {
-	('S','GoTo')      : 'D', # TODO: remove?
+#	('S','GoTo')      : 'D', # TODO: remove?
 	('S','GoToR')     : 'F',
 	('S','GoToE')     : 'F',
 	('S','Launch')    : ('F','Win','Mac','Unix'), # TODO: list not yet implemented
 	('S','URI')       : 'URI',
 	('S','SumbitForm'): 'F',
 	('S','JavaScript'): 'JS',
-#	('OpenAction','') : '', # TODO
-#	('AA','')         : '', # TODO
-#	('Type','ObjStm') : 'Stream' # Not seen as a risk, we iterate through the stream
+	('OpenAction','') : '', # TODO
+	('AA','')         : '', # TODO
+#	('Type','ObjStm') : 'Stream' # Not seen as a risk, we iterate through streams
 	}
 
 #TODO: consider / check applicability of:
@@ -126,7 +126,7 @@ def vprint(string,verbositylevel=1,delimiter='\n'):
 		print(string, end=delimiter)
 
 def halt(message=""):
-	sys.exit("EXIT"+message)
+	sys.exit("EXIT: "+message)
 
 def num(s):
 	if isinstance(s,str):
@@ -134,7 +134,7 @@ def num(s):
 	elif isinstance(s,tuple):
 		return int(s[0])
 	else:
-		halt("[Error converting object to number]")
+		halt("Error converting object to number")
 
 def getword(file):
 # Return next word or next delimiter
@@ -145,7 +145,7 @@ def getword(file):
 	while not delimiter:
 		singlebyte = file.read(1)
 		if singlebyte == b'': # EOF
-			return ''
+			return foundword
 		if verbosity > 2:
 			vprint("{POS: "+
 				str(file.tell()-1)+
@@ -198,13 +198,17 @@ def checkdictionary(dictionary):
 		keyvaluepair = (i,dictionary.get(i))
 		keyvaluepairempty = (i,"")
 		# TODO: incorrect below, and we can make use of the fact that dict.get() returns none if the key is not found
-		if keyvaluepair in list(riskydictionary.keys()) or keyvaluepairempty in list(riskydictionary.keys()):
+		if keyvaluepair in list(riskydictionary.keys()):
 			objectandvalue = (	currentobject,
-								"".join(dictionary.get(riskydictionary.get(keyvaluepair,""),""))+
-								"".join(dictionary.get(riskydictionary.get(keyvaluepairempty,""),"")))
+								"".join(dictionary.get(riskydictionary.get(keyvaluepair,""),"")))
 			key=keyvaluepair[1]
 			dictionaryappendlist(counttable,key,objectandvalue)
-#			print(key,objectandvalue) #DEBUG
+		elif keyvaluepairempty in list(riskydictionary.keys()):
+			objectandvalue = (	currentobject,
+#								"".join(dictionary.get(riskydictionary.get(keyvaluepairempty,""),"")))
+								"".join(dictionary.get(i                                    ,"")))
+			key=i
+			dictionaryappendlist(counttable,key,objectandvalue)
 
 def getdictionary(file,followlinks=False):
 # sequence of key - object pairs, of which at least the key is a /name (without slash)
@@ -217,8 +221,8 @@ def getdictionary(file,followlinks=False):
 	dictionary = {}
 	while getkey != '>' and getobject != '>':
 		getkey = readobject(file)#.get("SingleString")
-		getobject = readobject(file,getkey=='Length')#.get("SingleString") # TODO: a bit of a hack, but we want to follow links here to get the length value if it's stored by a referenced object (per pdf spec)
-		dictionary[getkey] = getobject # First step to get rid of globals, and return a dictionary
+		getobject = readobject(file,getkey in followlinkslist)
+		dictionary[getkey] = getobject
 #		vprint("[KEY,OBJECT]: "+getkey+", "+getobject+" ",2) #TODO: remove/adapt: getobject can be something else than string
 	nword, nnword = getnexttwowords(file)
 	if nword == 'stream':
@@ -226,10 +230,10 @@ def getdictionary(file,followlinks=False):
 		length=num(dictionary.get("Length"))
 		getword(file) # actually read the word 'stream' (including trailing delimiter)
 		file.seek(-1,1) #stream follows after 'stream\r\n' or 'stream\n'
-		if nextchar(file) == '\n': 
-			file.read(1) # it was 'stream\n'
+		if ord(nextchar(file)) == 13: # \r
+			file.read(2) # read 'stream\r\n'
 		else:
-			file.read(2) # it was 'stream\r\n'
+			file.read(1) # read 'stream\n'
 		stream=file.read(length)
 		vprint("[STREAM] "+str(length)+" bytes",2)
 		if "Filter" in list(dictionary.keys()):
@@ -242,7 +246,14 @@ def getdictionary(file,followlinks=False):
 					try:
 						stream=zlib.decompress(stream)
 					except:
-						vprint("Decompression error FlateDecode",0)
+						vprint("Decompression error FlateDecode"+" at: "+hex(file.tell()),1)
+						try:
+							vprint("streamlength: "+str(len(stream))+
+								", firstbyte: "+str(stream[0])+
+								", lastbyte: "+str(stream[len(stream)-1])+
+								", ZLIB runtime version: "+zlib.ZLIB_RUNTIME_VERSION,2)
+						except:
+							vprint("No return stream given by zlib",2)
 					vprint(stream,3)
 				elif streamfilter == 'ASCII85Decode':
 					vprint("[FILTER]: "+streamfilter,2)
@@ -257,6 +268,7 @@ def getdictionary(file,followlinks=False):
 					pass
 				else:
 					vprint("Filter not implemented: "+streamfilter,1)
+					# TODO: use counttable instead to give list of unimplemented filters with objects at the end of the scan. 
 					# TODO: need to break here if multiple compressions are used of which one fails to prevent error out. 
 		getword(file) # the word endstream
 		if dictionary.get("Type")=="XRef":
@@ -303,7 +315,7 @@ def getliteralstring(file):
 	while parenthesecount > 0:
 		psinglechar = singlechar
 		singlechar = chr(file.read(1)[0])
-		if psinglechar != 92:
+		if psinglechar != "\\":
 			# count un-escaped parenthese if present, and add character to string
 			if singlechar =='(':
 				parenthesecount += 1
@@ -423,9 +435,7 @@ def readobject(file,followlinks=False):
 	elif foundword in readobjectdefaultlist:
 		return foundword
 	else:
-		vprint("[ERROR: unexpected end of object] found: "+foundword,0)
-		sys.exit(0)
-		foundword = ""
+		halt("Unexpected end of object, found: "+foundword+" at: "+hex(file.tell()))
 
 def readindirectobject(file):
 	ppword=""
@@ -455,7 +465,10 @@ def showthreats():
 		for j in list(counttable.get(i)):
 			objectstring = str(j[0][0])+" "+str(j[0][1])
 			valuestring = j[1]
-			print("/"+i+" in object "+objectstring+" (at: "+hex(crossreflist.get(j[0]))+"): "+valuestring)
+			print("/"+i+
+				" in object "+objectstring+
+				" (at: "+hex(crossreflist.get(j[0]))+
+				"): "+valuestring)
 
 def getxref(file):
 	vprint("[XREF]",2)
@@ -530,6 +543,7 @@ def readpdf(file,startxrefpos):
 		getxref(file)
 		vprint(list(crossreflist.keys())[0],3)
 	else: # assume to read a cross reference stream
+		#TODO: migrate to separate function as done with getxref()
 		vprint("[XREF Stream]",2)
 		xrefdictionary=readindirectobject(file)
 #		print(xrefdictionary)
@@ -597,8 +611,7 @@ def readarguments():
 	if os.path.isfile(args.filename):
 		return args.filename, args.d
 	else:
-		print("File not found")
-		sys.exit()
+		halt("File not found")
 
 infile, verbosity = readarguments()
 vprint("Scanning: "+infile,0)
