@@ -50,7 +50,7 @@ until finished
 8) Hardening / handling of malformed pdf's: incorrect location of xref, reference to incorrect location of objects, of non-existent obects. 
 
 ## Version History
-#### v0.5 XX May 2020
+#### v0.5 30 May 2020
 ##### New:
 - Output number of scanned objects
 - Checks pdf header
