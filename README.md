@@ -44,9 +44,24 @@ until finished
 2) Refactorig iterations in general
 3) Speed optimizations (like don't uncompress if not needed)
 4) Determine if a split between high and low-risk threats is useful
+5) Check/improve object scanning and numbering
+6) Summarize exceptions that occurred using filters
+7) Linearized pdf's
+8) Hardening / handling of malformed pdf's: incorrect location of xref, reference to incorrect location of objects, of non-existent obects. 
 
 ## Version History
-#### v0.4
+#### v0.5 XX May 2020
+##### New:
+- Output number of scanned objects
+- Checks pdf header
+- Handling of escaped backlashes in literal strings, translation of hexadecimal strings, and hex characters in names (obfuscation)
+- Printing nonprintable characters (verbosity >1)
+- Abilty to find crossreference tables despite incorrect position references to them
+##### Bugfixes
+- Crossreference lists not used as global variables in functions
+- Comment handling for some EOF situations
+
+#### v0.4 22 May 2020
 ##### New:
 - /OpenAction and /AA
 ##### Bugfixes
@@ -78,7 +93,7 @@ This program is distributed in the hope that it will be useful, but WITHOUT ANY 
 ## Acknowledgments
 
 * Didier Stevens for sharing his knowledge on maliciuos pdf files
-* Yusuke Shinyama, for some of the decoding filters
+* Yusuke Shinyama, for some of the decoding filters from pdfminer
 
 
 
