@@ -41,31 +41,40 @@ until finished
 
 ### TODO list
 1) DCTDecode filter
-2) Refactorig iterations in general
+2) Refactoring iterations in general
 3) Speed optimizations (like don't uncompress if not needed)
 4) Determine if a split between high and low-risk threats is useful
 5) Check/improve object scanning and numbering
 6) Summarize exceptions that occurred using filters
 7) Linearized pdf's
-8) Hardening / handling of malformed pdf's: incorrect location of xref, reference to incorrect location of objects, of non-existent obects. 
 
 ## Version History
+#### v0.6 31 May 2020
+##### New:
+- Scans pdf for objects independent of cross reference tables. Hardening / handling of malformed pdf's: ability to handle incorrect location of xref, reference to incorrect location of objects, of non-existent objects. 
+##### Bugfixes
+- Filter function is now byte-wise (resulting in incorrect object numbers, locations, etc)
+
+
 #### v0.5 30 May 2020
 ##### New:
 - Output number of scanned objects
 - Checks pdf header
 - Handling of escaped backlashes in literal strings, translation of hexadecimal strings, and hex characters in names (obfuscation)
-- Printing nonprintable characters (verbosity >1)
-- Abilty to find crossreference tables despite incorrect position references to them
+- Printing non-printable characters (verbosity >1)
+- Ability to find cross reference tables despite incorrect position references to them
+- Option to print pdf document structure to screen with object locations
 ##### Bugfixes
 - Crossreference lists not used as global variables in functions
 - Comment handling for some EOF situations
+
 
 #### v0.4 22 May 2020
 ##### New:
 - /OpenAction and /AA
 ##### Bugfixes
 - Fixed incorrect escape handling in strings 
+
 
 #### v0.3: 21 May 2020
 ##### New: 
@@ -75,12 +84,15 @@ until finished
 - Only read DecodeParms if they exist
 - EOF was not handled correctly in readword function
 
+
 #### v0.2: 20 May 2020
 ##### New:
 - Ability to read cross reference streams
 
+
 #### v0.1
 First rudimentary version
+
 
 ## License
 
@@ -92,7 +104,7 @@ This program is distributed in the hope that it will be useful, but WITHOUT ANY 
 
 ## Acknowledgments
 
-* Didier Stevens for sharing his knowledge on maliciuos pdf files
+* Didier Stevens for sharing his knowledge on malicious pdf files
 * Yusuke Shinyama, for some of the decoding filters from pdfminer
 
 

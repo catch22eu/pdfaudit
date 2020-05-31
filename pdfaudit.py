@@ -25,7 +25,7 @@ from ascii85 import ascii85decode 	# for decoding
 from lzw import lzwdecode			# for decoding
 from ccitt import ccittfaxdecode	# for decoding
 
-apversion='''pdfaudit v0.5'''
+apversion='''pdfaudit v0.6'''
 apdescription='''pdfaudit is a pdf auditing tool for security and privacy'''
 apepilog='''pdfaudit Copyright (C) 2020 Joseph Heller
 This program comes with ABSOLUTELY NO WARRANTY; for details type use '-w'.
@@ -81,6 +81,7 @@ characterlist="acdeghijklmopqsuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
 printable=" !#$%&()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[]^_`abcdefghijklmnopqrstuvwxyz{|}~';"
 counttable = {}
 crossreflist = {}
+objstmlist = {}
 crossreflistcompressed = {}
 crossreflistvfy = {}
 scannedobjects = {}
@@ -171,23 +172,19 @@ def getword(file):
 		delimiter = (singlebyte[0] in whitespacelist + delimiterlist)
 		if foundword == "" and singlebyte[0] in whitespacelist:
 			# ignore trailing whitespaces
-			vprint("TD",4)
 			delimiter = False
 		elif singlebyte[0] == 37: 
 			# ignore % comments
 			readcomment(file)
 		elif not delimiter:
 			# add non-whitespace/delimiter
-			vprint("ND",4)
 			foundword += chr(singlebyte[0])
 		elif singlebyte[0] in delimiterlist:
 			if foundword == "":
 				# send delimiter if it's the first character we encounter
-				vprint("TDEL",4)
 				foundword += chr(singlebyte[0])
 			else:
 				# read this character next time; so seek one position back
-				vprint("LDEL",4)
 				file.seek(-1,1)
 	return foundword
 
@@ -449,7 +446,7 @@ def getname(file):
 	return foundword
 
 def getobjectpos(key):
-# Returns the object location found fron the xref tables, or if it's not there, from the findobjects() scan done earlier. 
+# Returns the object location found from the xref tables, or if it's not there, from the findobjects() scan done earlier. 
 	if key in list(crossreflist.keys()):
 		pos=crossreflist.get(key)
 	elif key in list(crossreflistvfy.keys()):
@@ -551,7 +548,7 @@ def readindirectobject(file):
 		elif foundword == 'endstream': #TODO: do we ever reach this? consider deleting
 			vprint("[ENDSTREAM]",2)
 			return foundword
-
+'''
 def findobjects(file,startpos):
 # Almost similar to readinidirectobject(); we do a quick scan here to find obj/endobj pairs, and build a dictionary of object positions to compare with the xref tables. 
 	global crossreflistvfy
@@ -583,12 +580,23 @@ def findobjects(file,startpos):
 				pass
 #	print(crossreflistvfy)
 	file.seek(currentpos)
+'''
 
+'''
+def isxrefstream(file,pos):
+	currentpos=file.tell()
+	file.seek(pos)
+	if getword(file)=='xref':
+		file.seek(currentpos)
+		return False
+	else: # TODO: should check here if it is an object, or otherwise elsewhere
+		file.seek(currentpos)
+		return True
+'''
 
 def getdocumentstructure(file):
-# Based on findobjects (TODO: combine?), scans the complete pdf to retrieve the document structure. Purpose is to find all objects, their locations, being either indirect objects or objects from objectsreams. The first type of objects are retrieved by just scanning the document from the start, the latter is done as well by retrieving the crossreference stream once this is encountered. This strategy deviates from the pdf specification, where the pdf document is supposed to be read from the back to retreive the document structure from (compressed) xref tables. This poses problems for malformed pdf files, when references are pointing to incorrect object locations. For these situations a document scan as described above needs to be performed anyhow to continue reading the pdf and not error out. The issue at hand is that some maliciuos pdf's may be altered in such a way, that pdf readers that are able to deal with malformed pdf's might still be able to read these pdf's and pose a risk. Pdfaudit therefore regards it's own constructed document structure as basis  instead of the method described in the pdf specificaton. 
-# Note that there are basically 3 types of pdf files with respect to cross reference tables. 1) a pdf file with one or more regular xref tables, which are pointed to by startxref at the end of a pdf and the Prev entries in the trailer in case there are more pdf revisions. 2) no xref table but a cross refernce stream instead (it has per pdf specificatin no xref and no trailer section, and startxref points to the cross reference stream). 3) a hybrid version containing both types of xross refence tables.
-	global crossreflistvfy
+# Based on findobjects (TODO: combine?), scans the complete pdf to retrieve the document structure. Purpose is to find all objects, their locations, being either indirect objects or objects from objectsreams. This is done by just scanning the document from the start. This strategy deviates from the standard strategy from the pdf specification, where the pdf document is supposed to be read from the back to retreive the document structure from (compressed) xref tables. The standard strategy poses problems for malformed pdf files, when references are pointing to incorrect object locations. For these situations a document scan as described above needs to be performed anyhow to continue reading the pdf and not error out. The issue at hand is that some maliciuos pdf's may be altered in such a way, that pdf readers that are able to deal with malformed pdf's might still be able to read these pdf's and pose a risk. Pdfaudit therefore regards it's own constructed document structure as basis  instead of the method described in the pdf specificaton. The penalty however is processing speed, as the document is read twice. 
+# Less relevant, but note that there are basically 3 types of pdf files with respect to cross reference tables. 1) a pdf file with one or more regular xref tables, which are pointed to by startxref at the end of a pdf and the Prev entries in the trailer in case there are more pdf revisions. 2) no xref table but a cross refernce stream instead (it has per pdf specificatin no xref and no trailer section, and startxref points to the cross reference stream). 3) a hybrid version containing both types of xross refence tables.
 	global verbosity
 	vprint("[GETSTRUCTURE]",2)
 	file.seek(1)
@@ -611,27 +619,49 @@ def getdocumentstructure(file):
 #		print(foundword,"at:",hex(pos),"currentpos at:",hex(file.tell())) #DEBUG
 		if foundword == 'obj':
 			vprint("    "+ppword+" "+pword+" obj at: "+hex(pppos)+" ",2)
-			crossreflistvfy[num(ppword),num(pword)]=pppos
-			while getword(file) != 'endobj': # TODO: check need to add other delimiters like >, >>, ] 
-				pass
+			crossreflist[num(ppword),num(pword)]=pppos
+			while foundword != 'endobj': # TODO: check need to add other delimiters like >, >>, ] 
+				foundword = getword(file)
+				if foundword == 'ObjStm':
+					vprint("        has ObjStm",2)
+					objstmlist[num(ppword),num(pword)]=pppos
 #			print(hex(file.tell())) # DEBUG
+# TODO: add progress indicator here, like done in iterateobjectlist()
 		elif foundword == 'xref':
 			vprint("xref at: "+hex(pos),2)
+			# TODO: read xref table, and check if this matches the object locations
 		elif foundword == 'trailer':
 			vprint("trailer at: "+hex(pos),2)
 			pverbosity=verbosity
 			verbosity=1
 			trailer=readobject(file)
 			if trailer.get("Prev",0) != 0:
-				vprint("    Prev is: "+hex(int(trailer.get("Prev"))))
+				vprint("    Prev is: "+hex(int(trailer.get("Prev"))),2)
 			if trailer.get("XRefStm",0) != 0:
-				vprint("    XRefStm is: "+hex(int(trailer.get("XRefStm"))))
+				vprint("    XRefStm is: "+hex(int(trailer.get("XRefStm"))),2)
 			verbosity=pverbosity
 		elif foundword == 'startxref':
 			vprint("startxref at: "+hex(pos),2)
 			startxref=int(getword(file))
-			vprint("    position is: "+hex(startxref),2)
+			vprint("    points to: "+hex(startxref),2)
+# TODO: the next section errors out on malformed pdf's, so commented out; as explained above, we scan the actual pdf from the beginning to locate the object postions anyways. 
+#			if isxrefstream(file,startxref):
+#				vprint("    which is a cross reference stream",2)
+#				currentpos=file.tell()
+#				file.seek(startxref)
+#				pverbosity=verbosity
+#				verbosity=1
+#				getxrefstream(file)
+#				file.seek(currentpos)
+#				verbosity=pverbosity
+#			else:
+#				vprint("    points to xref",2)
 			vprint("EOF or new PDF revision",2)
+#	print(objstmlist) #DEBUG
+#	print(crossreflist) #DEBUG
+	iterateobjectlist(file,objstmlist)
+	iterateobjectlist(file,crossreflist)
+	showthreats()
 
 def showthreats():
 #	print(counttable) #DEBUG
@@ -644,6 +674,7 @@ def showthreats():
 				" (at: "+hex(crossreflist.get(j[0]))+
 				"): "+valuestring)
 
+'''
 def getxref(file):
 # Read the crossreference table, and stores object locations in crossreflist
 	global crossreflist
@@ -717,6 +748,7 @@ def getstartxref(file):
 	vprint("[XREF]: at "+hex(start),2)
 	file.seek(startxrefpos)
 	return start
+'''
 
 def getpdfversion(file):
 	file.seek(0)
@@ -725,6 +757,22 @@ def getpdfversion(file):
 	if "PDF" not in versionstring:
 		halt("Incorrect PDF header, found: "+versionstring)
 
+def iterateobjectlist(file,objectlist):
+#TODO: progress counter
+	j=0
+	global currentobject
+	vprint("[XREFITER] Number of objects: "+ str(len(objectlist)),2) # TODO: comparing with this number is inaccurate, as the list grows for each pdf version of the document, while the old objects are already scanned. 	
+	for i in list(objectlist):
+		vprint("[XREFITERCMP]:"+str(i[0])+" "+str(i[1]),2)
+		currentobject=i
+		jumptoobject(file,str(i[0]),str(i[1])) # TODO: juggling with num to string to num
+		if verbosity<2:
+			print("progress: "+str(int(100*j/len(objectlist)))+"%, scanning object: "
+				+str(i[0])+" "+str(i[1])+"             ",end='\r')
+		j += 1
+	print("                                                            ",end='\r')
+
+'''
 def iteratexref(file):
 	j=0
 	global currentobject
@@ -753,10 +801,17 @@ def iteratecompressedxref(file,ObjStmList):
 #			print("progress: "+str(int(100*j/len(crossreflist)))+"%, scanning object: "
 #				+str(i[0])+" "+str(i[1])+"             ",end='\r')
 #		j += 1
-	
+'''
+
+'''
+def bytesum(b1,b2):
+	bsum=bytearray(len(b1))
+	for i in range(len(b1)):
+		bsum[i]=(b1[i]+b2[i])%256
+	return bsum
 
 def getxrefstream(file):
-# the complete dictionary is retrieved. The stream inside the dicionary contains the xrossreference table, which may have have been coded with a predictor. In that case, the predictor is executed on the stream to retrieve the bare stream. First part of this stream is the object list, which is read, and the last part are the objects references itself. The result is stored in the global crossreflist(comressed) lists, and the indirect objects that contain ObjStm's is returned. 
+# the complete dictionary is retrieved. The stream inside the dicionary contains the crossreference table, which may have have been coded with a predictor. In that case, the predictor is executed on the stream to retrieve the bare stream. First part of this stream is the object list (which consists of N pairs object number and offset from the first object in the stream), which is read, and the last part are the objects references itself. The result is stored in the global crossreflist(comressed) lists, and the indirect objects that contain ObjStm's is returned. 
 	global crossreflist
 	global crossreflistcompressed
 	vprint(" ",2)
@@ -778,10 +833,19 @@ def getxrefstream(file):
 			n+=1
 	objectlist = [stream[i:i+n] for i in range(0, len(stream), n)] # list comprehension
 	vprint("[XREF Stream objects]: "+xrefdictionary.get("Size"),3)
-	predictorlist=[i[0] for i in objectlist] # list comprehension
-	fieldlist=[i[fieldstart:n] for i in objectlist] # list comprehension
+	predictorlist=[i[0] for i in objectlist] # list comprehension; get first column
+	fieldlist=[i[fieldstart:n] for i in objectlist] # list comprehension; get rest of the column
 #	print(fieldlist) # DEBUG
+#	print(predictorlist) # DEBUG
+
 	xreflist=[]
+	if predictor:
+		for i in range(len(fieldlist)-1):
+#			print(fieldlist[i]) #DEBUG
+			if predictorlist[i+1]==2:
+				fieldlist[i+1]=bytesum(fieldlist[i],fieldlist[i+1])
+			else:
+				halt("XREF Stream predictor not implemented")
 	for field in list(fieldlist):
 		entry=[]
 		for i in range(len(w)):
@@ -789,13 +853,7 @@ def getxrefstream(file):
 			fend=sum(w[0:i])+w[i]
 			entry.append(int.from_bytes(field[fstart:fend],byteorder='big', signed=False))
 		xreflist.append(entry)
-	if predictor:
-		for i in range(len(xreflist)-1):
-#			print(xreflist[i]) #DEBUG
-			if predictorlist[i+1]==2:
-				xreflist[i+1]=list(map(lambda x,y:x+y, xreflist[i], xreflist[i+1]))
-			else:
-				halt("XREF Stream predictor not implemented")
+
 #	print(xreflist) # DEBUG
 	# TODO: implement reading and using Index (first object number and number of entries), defaults to [0 size]
 	xreflistsize=len(crossreflist)
@@ -807,22 +865,27 @@ def getxrefstream(file):
 		field1=xreflist[i][0] # field type
 		if field1==1: # e.g. 'n'
 			crossreflist[i,field3]=field2
-			vprint("Object found: "+str(i)+" "+str(field3)+" at: "+ hex(field2),2)
 			# this either inserts a new key, or updates an existing one.
+			vprint("        "+str(i)+" "+str(field3)+ " is at: "+hex(field2),2)
 		elif field1==0: # e.g. 'f'
 			if (i,field3) in list(crossreflist.keys()): #should normally be the case
 				del crossreflist[i,field3-1] # per pdf spec: generations are incremented by 1
+				vprint("        "+str(field2)+" "+str(field3)+" deleted",2)
 		elif field1==2: # compressed objects list
 			# The objects found are not stored here, but when scanning the ObjStm. We need however to store all object nunbers that contain compressed objects, in order to scan these later. 
 			if xreflist[i][1] not in list(ObjStmList):
 				vprint("ObjStm Object found: "+str(field2)+" 0",2)
 				ObjStmList.append(field2)
+				vprint("        "+str(field3)+" 0 is in ObjStm: "+str(field2)+" 0",2)
+				vprint("        "+str(field2)+" 0 has ObjStm",2)
 		else:
 			pass
 #			halt("Unexpected type found reading cross reference stream")
 	vprint("[XREF Stream]: END",2,'')
 	return ObjStmList
+'''
 
+'''
 def readpdf(file,xrefpos):
 # Main principle is to first read the trailer and recurse to the previous version of the pdf, then read the xref table, then read all objects from the pdf version we're handling. Note that readindirectobject() is used to find and read the trailer. 
 # Per PDF spec, the Crossreference table and trailer are structured like this:
@@ -859,7 +922,8 @@ def readpdf(file,xrefpos):
 
 #		+"/"+str(len(xreflist))
 		)
-	
+'''
+
 def readarguments():
 # note: Parameters starting with - or -- are usually considered optional. All other parameters are positional parameters and as such required by design (like positional function arguments).
 	parser = argparse.ArgumentParser(description=apdescription,epilog=apepilog,formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -879,10 +943,11 @@ infile, verbosity, showstructure = readarguments()
 vprint("Scanning: "+infile,0)
 with open(infile, 'rb') as file:
 	getpdfversion(file)
-	if showstructure:
-		verbosity = 2
-		getdocumentstructure(file)
-		halt("show structure")
-	readpdf(file,getstartxref(file))
-	showthreats()
+	getdocumentstructure(file)
+#	if showstructure:
+#		verbosity = 2
+#		getdocumentstructure(file)
+#		halt("show structure")
+#	readpdf(file,getstartxref(file))
+#	showthreats()
 
