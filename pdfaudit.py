@@ -25,7 +25,7 @@ from ascii85 import ascii85decode 	# for decoding
 from lzw import lzwdecode			# for decoding
 from ccitt import ccittfaxdecode	# for decoding
 
-apversion='''pdfaudit v0.6'''
+apversion='''pdfaudit v0.7'''
 apdescription='''pdfaudit is a pdf auditing tool for security and privacy'''
 apepilog='''pdfaudit Copyright (C) 2020 Joseph Heller
 This program comes with ABSOLUTELY NO WARRANTY; for details type use '-w'.
@@ -225,16 +225,16 @@ def getdictionary(file,followlinks=False):
 # sequence of key - object pairs, of which at least the key is a /name (without slash)
 # it may be followed by a stream, which is encapsulated by the words "stream" and "endstream"
 # TODO: handling of specific keys and return values (Length, Size): from global to variables to returns from this function (as this function may be called recursively)
+# TODO: the stream itself needs to be checked "in the context to which it is referred to"
 	global globaldictvaluesize # TODO: from global variable to return'd value from this function
 	vprint("[DICT]", 2, '')
 	getkey = ""
 	getobject = ""
 	dictionary = {}
 	while getkey != '>' and getobject != '>':
-		getkey = readobject(file)#.get("SingleString")
+		getkey = readobject(file)
 		getobject = readobject(file,getkey in followlinkslist)
 		dictionary[getkey] = getobject
-#		vprint("[KEY,OBJECT]: "+getkey+", "+getobject+" ",2) #TODO: remove/adapt: getobject can be something else than string
 	nword, nnword = getnexttwowords(file)
 	if nword == 'stream':
 		#TODO: followsymlinks handling in case stream can have symlinks
@@ -255,6 +255,7 @@ def getdictionary(file,followlinks=False):
 			for streamfilter in list(filterlist):
 				vprint("[DECODE]: "+streamfilter+" ",2,'')
 				if streamfilter == "FlateDecode":
+					#TODO: Predictor filters not implemented yet, see getxrefstream(). It is possible we encounter an xrefstream as we might not explicitly have searched and parsed one. 
 					try:
 						stream=zlib.decompress(stream)
 						vprint(makeprintable(stream),3)
@@ -276,7 +277,8 @@ def getdictionary(file,followlinks=False):
 				elif streamfilter == '/':
 					pass
 				else:
-					vprint("Filter not implemented: "+streamfilter,1)
+					vprint("Filter not implemented: "+streamfilter+", found in object: "+
+						str(currentobject[0])+" "+str(currentobject[1]),1)
 					# TODO: use counttable instead to give list of unimplemented filters with objects at the end of the scan. 
 					# TODO: need to break here if multiple compressions are used of which one fails to prevent error out. 
 		getword(file) # the word endstream
@@ -354,29 +356,25 @@ def translatestring(string):
 
 def getliteralstring(file):
 # unbalanced parenthese ")" terminates the string
-# to be escaped: \(, \) 
+# to be escaped: \(, \) , but not \\( or \\)
+# uglyness of the pdf spec resulting in so far ugly code
+# process the found string further with translatestring()
 	vprint("[STR]",3,'')
-	foundstring= ""
-	psinglechar = "("
-	singlechar = ""
+	foundstring= " ("
 	parenthesecount = 1
 	while parenthesecount > 0:
-		psinglechar = singlechar
-		singlechar = chr(file.read(1)[0])
-		if psinglechar != "\\":
-			# count un-escaped parenthese if present, and add character to string
-			if singlechar =='(':
+		foundstring += chr(file.read(1)[0])
+		if foundstring[-1:]=='(':
+			if foundstring[-2:-1]==chr(92) and foundstring[-3:-2]!=chr(92):
+				pass
+			else:
 				parenthesecount += 1
-			elif singlechar ==')':
+		if foundstring[-1:]==')':
+			if foundstring[-2:-1]==chr(92) and foundstring[-3:-2]!=chr(92):
+				pass
+			else:
 				parenthesecount -= 1
-			if parenthesecount >0:
-				foundstring += singlechar
-		else:
-			# escape the characters indicated below, replace last backslash
-			if singlechar =='(':
-				foundstring = foundstring [:-1] + '('
-			elif singlechar ==')':
-				foundstring = foundstring [:-1] + ')'
+	foundstring=foundstring[2:-1]
 	foundstring=translatestring(foundstring)
 	vprint(foundstring,2)
 	return foundstring
@@ -416,6 +414,7 @@ def getarray(file):
 	while ']' not in foundarray:
 		foundarray.append(readobject(file,followlinks=False))
 	foundarray = foundarray[:-1]
+	vprint("[ARRAY END]",3,'')
 	if len(foundarray)==1:
 		return foundarray[0]
 	else:
@@ -524,7 +523,7 @@ def readobject(file,followlinks=False):
 	elif foundword in readobjectdefaultlist:
 		return foundword
 	else:
-		halt("Unexpected end of object, found: "+foundword+" at: "+hex(file.tell()))
+		halt("Unexpected end of object, found: "+makeprintable(foundword)+" at: "+hex(file.tell()))
 
 def readindirectobject(file):
 # Returns an object or trailer, or the word 'endobj' or 'endstream'. Note that is is also used to scan over the xref table in order to read and return the trailer object. 
@@ -549,40 +548,6 @@ def readindirectobject(file):
 			vprint("[ENDSTREAM]",2)
 			return foundword
 '''
-def findobjects(file,startpos):
-# Almost similar to readinidirectobject(); we do a quick scan here to find obj/endobj pairs, and build a dictionary of object positions to compare with the xref tables. 
-	global crossreflistvfy
-	currentpos=file.tell()
-	vprint("[FINDOBJS]: scanning for objects from "+hex(startpos)+" to "+hex(currentpos),2)
-	file.seek(startpos)
-	ppword=""
-	pword=""
-	pppos = 0
-	ppos = 0
-	pos = 0
-	foundword="x"
-#	while foundword!="": # just scan complete document
-	while file.tell()<currentpos:
-		while nextchar(file) not in "0123456789abcdefghijklmnopqrstuvwxyz":
-#			print(".") #DEBUG
-			file.read(1)
-		pppos = ppos
-		ppos = pos
-		pos = file.tell()
-		ppword = pword
-		pword = foundword
-		foundword = getword(file)
-#		print(foundword,"at:",hex(pos),"currentpos at:",hex(file.tell())) #DEBUG
-		if foundword == 'obj':
-			vprint("("+ppword+" "+pword+") at: "+hex(pppos)+" ",2 , '')
-			crossreflistvfy[num(ppword),num(pword)]=pppos
-			while getword(file) != 'endobj': # TODO: check need to add other delimiters like >, >>, ] 
-				pass
-#	print(crossreflistvfy)
-	file.seek(currentpos)
-'''
-
-'''
 def isxrefstream(file,pos):
 	currentpos=file.tell()
 	file.seek(pos)
@@ -598,7 +563,12 @@ def getdocumentstructure(file):
 # Based on findobjects (TODO: combine?), scans the complete pdf to retrieve the document structure. Purpose is to find all objects, their locations, being either indirect objects or objects from objectsreams. This is done by just scanning the document from the start. This strategy deviates from the standard strategy from the pdf specification, where the pdf document is supposed to be read from the back to retreive the document structure from (compressed) xref tables. The standard strategy poses problems for malformed pdf files, when references are pointing to incorrect object locations. For these situations a document scan as described above needs to be performed anyhow to continue reading the pdf and not error out. The issue at hand is that some maliciuos pdf's may be altered in such a way, that pdf readers that are able to deal with malformed pdf's might still be able to read these pdf's and pose a risk. Pdfaudit therefore regards it's own constructed document structure as basis  instead of the method described in the pdf specificaton. The penalty however is processing speed, as the document is read twice. 
 # Less relevant, but note that there are basically 3 types of pdf files with respect to cross reference tables. 1) a pdf file with one or more regular xref tables, which are pointed to by startxref at the end of a pdf and the Prev entries in the trailer in case there are more pdf revisions. 2) no xref table but a cross refernce stream instead (it has per pdf specificatin no xref and no trailer section, and startxref points to the cross reference stream). 3) a hybrid version containing both types of xross refence tables.
 	global verbosity
+	if showstructure:
+		vpvalue=1
+	else:
+		vpvalue=2
 	vprint("[GETSTRUCTURE]",2)
+	filesize=file.seek(-1,2)
 	file.seek(1)
 	ppword=""
 	pword=""
@@ -618,32 +588,33 @@ def getdocumentstructure(file):
 		foundword = getword(file)
 #		print(foundword,"at:",hex(pos),"currentpos at:",hex(file.tell())) #DEBUG
 		if foundword == 'obj':
-			vprint("    "+ppword+" "+pword+" obj at: "+hex(pppos)+" ",2)
+			vprint("    "+ppword+" "+pword+" obj at: "+hex(pppos)+" ",vpvalue)
 			crossreflist[num(ppword),num(pword)]=pppos
 			while foundword != 'endobj': # TODO: check need to add other delimiters like >, >>, ] 
 				foundword = getword(file)
 				if foundword == 'ObjStm':
-					vprint("        has ObjStm",2)
+					vprint("        has ObjStm",vpvalue)
 					objstmlist[num(ppword),num(pword)]=pppos
 #			print(hex(file.tell())) # DEBUG
-# TODO: add progress indicator here, like done in iterateobjectlist()
+			if verbosity<2:
+				print("progress: "+str(int(100*pppos/filesize))+"%        ",end='\r')
 		elif foundword == 'xref':
-			vprint("xref at: "+hex(pos),2)
+			vprint("xref at: "+hex(pos),vpvalue)
 			# TODO: read xref table, and check if this matches the object locations
 		elif foundword == 'trailer':
-			vprint("trailer at: "+hex(pos),2)
+			vprint("trailer at: "+hex(pos),vpvalue)
 			pverbosity=verbosity
 			verbosity=1
 			trailer=readobject(file)
 			if trailer.get("Prev",0) != 0:
-				vprint("    Prev is: "+hex(int(trailer.get("Prev"))),2)
+				vprint("    Prev is: "+hex(int(trailer.get("Prev"))),vpvalue)
 			if trailer.get("XRefStm",0) != 0:
-				vprint("    XRefStm is: "+hex(int(trailer.get("XRefStm"))),2)
+				vprint("    XRefStm is: "+hex(int(trailer.get("XRefStm"))),vpvalue)
 			verbosity=pverbosity
 		elif foundword == 'startxref':
-			vprint("startxref at: "+hex(pos),2)
+			vprint("startxref at: "+hex(pos),vpvalue)
 			startxref=int(getword(file))
-			vprint("    points to: "+hex(startxref),2)
+			vprint("    points to: "+hex(startxref),vpvalue)
 # TODO: the next section errors out on malformed pdf's, so commented out; as explained above, we scan the actual pdf from the beginning to locate the object postions anyways. 
 #			if isxrefstream(file,startxref):
 #				vprint("    which is a cross reference stream",2)
@@ -656,7 +627,7 @@ def getdocumentstructure(file):
 #				verbosity=pverbosity
 #			else:
 #				vprint("    points to xref",2)
-			vprint("EOF or new PDF revision",2)
+			vprint("EOF or new PDF revision",vpvalue)
 #	print(objstmlist) #DEBUG
 #	print(crossreflist) #DEBUG
 	iterateobjectlist(file,objstmlist)
@@ -665,6 +636,7 @@ def getdocumentstructure(file):
 
 def showthreats():
 #	print(counttable) #DEBUG
+	print("\nFound threats:")
 	for i in list(counttable.keys()):	
 		for j in list(counttable.get(i)):
 			objectstring = str(j[0][0])+" "+str(j[0][1])
@@ -672,7 +644,7 @@ def showthreats():
 			print("/"+i+
 				" in object "+objectstring+
 				" (at: "+hex(crossreflist.get(j[0]))+
-				"): "+valuestring)
+				"): "+makeprintable(valuestring))
 
 '''
 def getxref(file):
@@ -762,46 +734,16 @@ def iterateobjectlist(file,objectlist):
 	j=0
 	global currentobject
 	vprint("[XREFITER] Number of objects: "+ str(len(objectlist)),2) # TODO: comparing with this number is inaccurate, as the list grows for each pdf version of the document, while the old objects are already scanned. 	
-	for i in list(objectlist):
+	for i in list(objectlist): #TODO: use currentobject instead of i here? 
 		vprint("[XREFITERCMP]:"+str(i[0])+" "+str(i[1]),2)
 		currentobject=i
-		jumptoobject(file,str(i[0]),str(i[1])) # TODO: juggling with num to string to num
 		if verbosity<2:
 			print("progress: "+str(int(100*j/len(objectlist)))+"%, scanning object: "
 				+str(i[0])+" "+str(i[1])+"             ",end='\r')
-		j += 1
-	print("                                                            ",end='\r')
-
-'''
-def iteratexref(file):
-	j=0
-	global currentobject
-	vprint("Number of objects: "+ str(len(crossreflist))) # TODO: comparing with this number is inaccurate, as the list grows for each pdf version of the document, while the old objects are already scanned. 
-	for i in list(crossreflist.keys()):
-		vprint("[XREFITER]:"+str(i),2)
-		currentobject=i
 		jumptoobject(file,str(i[0]),str(i[1])) # TODO: juggling with num to string to num
-		if verbosity<2:
-			print("progress: "+str(int(100*j/len(crossreflist)))+"%, scanning object: "
-				+str(i[0])+" "+str(i[1])+"             ",end='\r')
 		j += 1
 	print("                                                            ",end='\r')
 
-def iteratecompressedxref(file,ObjStmList):
-#TODO: progress counter
-	# j=0
-	global currentobject
-	#TODO: check if the object read tracker needs to be updated here as well. Or should this be done downstream?
-	vprint("[XREFITER] Number of objects: "+ str(len(ObjStmList))) # TODO: comparing with this number is inaccurate, as the list grows for each pdf version of the document, while the old objects are already scanned. 	
-	for i in list(ObjStmList):
-		vprint("[XREFITERCMP]:"+str(i)+" 0",2)
-		currentobject=(i,0)
-		jumptoobject(file,str(i),"0") # TODO: juggling with num to string to num
-#		if verbosity<2:
-#			print("progress: "+str(int(100*j/len(crossreflist)))+"%, scanning object: "
-#				+str(i[0])+" "+str(i[1])+"             ",end='\r')
-#		j += 1
-'''
 
 '''
 def bytesum(b1,b2):
