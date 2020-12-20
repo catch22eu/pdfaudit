@@ -25,7 +25,7 @@ from ascii85 import ascii85decode 	# for decoding
 from lzw import lzwdecode			# for decoding
 from ccitt import ccittfaxdecode	# for decoding
 
-apversion='''pdfaudit v0.7'''
+apversion='''pdfaudit v0.8'''
 apdescription='''pdfaudit is a pdf auditing tool for security and privacy'''
 apepilog='''pdfaudit Copyright (C) 2020 Joseph Heller
 This program comes with ABSOLUTELY NO WARRANTY; for details type use '-w'.
@@ -75,7 +75,7 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 whitespacelist = [0, 9, 10, 12, 13, 32] # per pdf specification
 delimiterlist = [40, 41, 60, 62, 91, 93, 123, 125, 47] # ()<>[]{}/
 newlinelist = [13, 10] # CR, LF
-followlinkslist = ['Length', 'S'] # Need to follow links in these cases
+followlinkslist = ['Length', 'S', 'OpenAction', 'AA'] # Need to follow links in these cases
 readobjectdefaultlist = ['true', 'false', 'endobj', '>', ']', 'null']
 characterlist="acdeghijklmopqsuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
 printable=" !#$%&()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[]^_`abcdefghijklmnopqrstuvwxyz{|}~';"
@@ -108,10 +108,6 @@ riskydictionary = {
 #
 #TODO: translate to OOP in general
 #TODO: get rid of global variables
-
-def noteof(file):
-	#TODO: does this cause performance issues; it gets called reading each charcter
-	return file.tell() < os.path.getsize(infile)
 
 def iswhitespace(char):
 	return char in whitespacelist
@@ -221,6 +217,15 @@ def checkdictionary(dictionary):
 			key=i
 			dictionaryappendlist(counttable,key,objectandvalue)
 
+# FEATURE?
+def streamistext(string):
+	try:
+		dstring=string.decode('ascii')
+	except UnicodeDecodeError:
+		pass
+	else:
+		vprint("Text-only stream content encounterd: "+dstring,1)
+
 def getdictionary(file,followlinks=False):
 # sequence of key - object pairs, of which at least the key is a /name (without slash)
 # it may be followed by a stream, which is encapsulated by the words "stream" and "endstream"
@@ -236,6 +241,7 @@ def getdictionary(file,followlinks=False):
 		getobject = readobject(file,getkey in followlinkslist)
 		dictionary[getkey] = getobject
 	nword, nnword = getnexttwowords(file)
+	
 	if nword == 'stream':
 		#TODO: followsymlinks handling in case stream can have symlinks
 		length=num(dictionary.get("Length"))
@@ -298,6 +304,7 @@ def getdictionary(file,followlinks=False):
 			vprint("[STREAM]: close ObjStm",2)
 		else:
 			dictionary["Stream"]=stream.decode('utf-8','ignore')
+#			streamistext(stream)
 		#TODO: followsymlinks handling in case stream can have symlinks
 	vprint("[DICT: end]",2,'')
 	checkdictionary(dictionary)
@@ -307,17 +314,15 @@ def iterateobjstm(file,n):
 # First read n objectnumber/byteoffset pairs, then iterate through all objects. The objects are also stored in the scannedobjects list
 	global scannedobjects
 	key={}
+	vprint("[ObjStm] xref table: ",2,"")
 	for i in range(n):
 		objectnumber = getword(file)
 		byteoffset = getword(file)
-		vprint(objectnumber+" "+byteoffset+" ",2,"")
-		#TODO: we currently read all objects, but some might be deleted in xref?
-		key[n] = (num(objectnumber),0)
-		#TODO: give list of objects instead of following:
-		#vprint('[ObJStm Object: '+objectnumber+',0]',2)
+		key[i] = (num(objectnumber),0)
+		vprint('[ObJStm Object ] found: '+objectnumber+',0',2)
 	for i in range(n):
 		vprint("[ObjStm Object]: "+str(i),2,'')
-		scannedobjects[key[n]]=readobject(file)
+		scannedobjects[key[i]]=readobject(file)
 
 def translatestring(string):
 # translates: \ddd, \n, \r, \t, \f, \b, \\, and ignores a single \
@@ -561,7 +566,7 @@ def isxrefstream(file,pos):
 
 def getdocumentstructure(file):
 # Based on findobjects (TODO: combine?), scans the complete pdf to retrieve the document structure. Purpose is to find all objects, their locations, being either indirect objects or objects from objectsreams. This is done by just scanning the document from the start. This strategy deviates from the standard strategy from the pdf specification, where the pdf document is supposed to be read from the back to retreive the document structure from (compressed) xref tables. The standard strategy poses problems for malformed pdf files, when references are pointing to incorrect object locations. For these situations a document scan as described above needs to be performed anyhow to continue reading the pdf and not error out. The issue at hand is that some maliciuos pdf's may be altered in such a way, that pdf readers that are able to deal with malformed pdf's might still be able to read these pdf's and pose a risk. Pdfaudit therefore regards it's own constructed document structure as basis  instead of the method described in the pdf specificaton. The penalty however is processing speed, as the document is read twice. 
-# Less relevant, but note that there are basically 3 types of pdf files with respect to cross reference tables. 1) a pdf file with one or more regular xref tables, which are pointed to by startxref at the end of a pdf and the Prev entries in the trailer in case there are more pdf revisions. 2) no xref table but a cross refernce stream instead (it has per pdf specificatin no xref and no trailer section, and startxref points to the cross reference stream). 3) a hybrid version containing both types of xross refence tables.
+# Less relevant, but note that there are basically 3 types of pdf files with respect to cross reference tables. 1) a pdf file with one or more regular xref tables, which are pointed to by startxref at the end of a pdf and the Prev entries in the trailer in case there are more pdf revisions. 2) no xref table but a cross reference stream instead (it has per pdf specification no xref and no trailer section, and startxref points to the cross reference stream). 3) a hybrid version containing both types of xross refence tables.
 	global verbosity
 	if showstructure:
 		vpvalue=1
@@ -597,7 +602,7 @@ def getdocumentstructure(file):
 					objstmlist[num(ppword),num(pword)]=pppos
 #			print(hex(file.tell())) # DEBUG
 			if verbosity<2:
-				print("progress: "+str(int(100*pppos/filesize))+"%        ",end='\r')
+				print("inventory: "+str(int(100*pppos/filesize))+"%        ",end='\r')
 		elif foundword == 'xref':
 			vprint("xref at: "+hex(pos),vpvalue)
 			# TODO: read xref table, and check if this matches the object locations
@@ -630,7 +635,7 @@ def getdocumentstructure(file):
 			vprint("EOF or new PDF revision",vpvalue)
 #	print(objstmlist) #DEBUG
 #	print(crossreflist) #DEBUG
-	iterateobjectlist(file,objstmlist)
+	iterateobjectlist(file,objstmlist) #TODO: some risk here that we start with the wrong objstm, and find a reference to an object in another objstm that is not yet scanned. 
 	iterateobjectlist(file,crossreflist)
 	showthreats()
 
@@ -711,7 +716,7 @@ def getstartxref(file):
 	file.seek(os.path.getsize(infile) -10) #start reading from the back
 	startxrefpos=findstartback(file,"startxref")
 	vprint("[STARTXREF] at: "+hex(startxrefpos),2)
-	while noteof(file):
+	while foundword!='':
 		foundword = getword(file)
 		if isnum(foundword):
 			start=num(foundword)
@@ -871,7 +876,7 @@ def readarguments():
 	parser = argparse.ArgumentParser(description=apdescription,epilog=apepilog,formatter_class=argparse.RawDescriptionHelpFormatter)
 	parser.add_argument('filename', type=str, help="pdf file to be audited")
 	parser.add_argument('-d', type=int, default=1, help="detail level D of output: 0 minimal, 1 default, 2 detail, 3 debug")
-	parser.add_argument('-s', action='store_true', help="show pdf document structure and exit")
+	parser.add_argument('-s', action='store_true', help="show pdf document structure during when making the inventory")
 	parser.add_argument('-v', action='version', help='show version', version=apversion)
 	parser.add_argument('-w', action='version', help='show warranty', version=apwarranty)
 	parser.add_argument('-c', action='version', help='show copyright', version=apcopyright)
@@ -886,10 +891,5 @@ vprint("Scanning: "+infile,0)
 with open(infile, 'rb') as file:
 	getpdfversion(file)
 	getdocumentstructure(file)
-#	if showstructure:
-#		verbosity = 2
-#		getdocumentstructure(file)
-#		halt("show structure")
-#	readpdf(file,getstartxref(file))
-#	showthreats()
+
 

@@ -8,15 +8,15 @@ URI,
 SumbitForm,
 JavaScript,
 OpenAction,
-AA
+and AA.
 
 PDFaudit outputs the content of the corresponding values and object location to aid assessment of security and privacy risks. 
 
-The tool is currently in development, with currently about 90% of the required code implemented. The pdf standard has multiple options to store document information, which makes it a challenge to cover all possible scenario's. Moreover, the document specification is at some instances less concisely defined, making room for multiple interpretations. Combined with the current development phase of pdfaudit, a 100% success rate can not yet be guaranteed of the tool parsing each pdf correctly in the first place, and detecting and reporting the security and privacy threats. The end goal however is to be compatible with at least the ISO 32000-1:2008, which covers PDF versions up to and including PDF1.7. 
+The tool is currently in development, with approximately 90% of the required code implemented. The pdf standard has multiple options to store document information, which makes it a challenge to cover all possible scenario's. Moreover, the document specification is at some instances less concisely defined, making room for multiple interpretations. Combined with the current development phase of pdfaudit, a 100% success rate can not yet be guaranteed of the tool parsing each pdf correctly in the first place, and detecting and reporting the security and privacy threats. The end goal however is to be compatible with all features defined in ISO 32000-1:2008, which covers PDF versions up to and including PDF1.7. 
 
 ### Prerequisites
 
-PDFaudit is written in Python, and uses Python3 code. For windows and OSx, see https://www.python.org/downloads/. For Linux, Python3 may already been installed or can be retrieved using your package manager and native repositories. 
+PDFaudit is written in Python, and uses Python3 code. For windows and OSx, see https://www.python.org/downloads/. For Linux, Python3 may already have been installed or can be retrieved using your package manager and native repositories. 
 
 ### Installing and Using
 
@@ -54,7 +54,14 @@ pdfaudit.py inputfile.pdf
 
 ## Version History
 
-#### v0.7 1 June 2020
+#### v0.8: 20 December 2020
+##### New:
+- indirect references in dictionaries are now followed for OpenAction and AA as well. 
+##### Bugfixes
+- incorrect object numbering of object streams
+
+
+#### v0.7: 1 June 2020
 ##### New:
 - Progress indication also when retrieving pdf document structure
 ##### Bugfixes
@@ -62,14 +69,14 @@ pdfaudit.py inputfile.pdf
 - Incorrect escape of literal strings
 - Print only printable characters when showing threats
 
-#### v0.6 31 May 2020
+#### v0.6: 31 May 2020
 ##### New:
 - Scans pdf for objects independent of cross reference tables. Hardening / handling of malformed pdf's: ability to handle incorrect location of xref, reference to incorrect location of objects, of non-existent objects. 
 ##### Bugfixes
 - Filter function is now byte-wise (resulting in incorrect object numbers, locations, etc)
 
 
-#### v0.5 30 May 2020
+#### v0.5: 30 May 2020
 ##### New:
 - Output number of scanned objects
 - Checks pdf header
@@ -82,7 +89,7 @@ pdfaudit.py inputfile.pdf
 - Comment handling for some EOF situations
 
 
-#### v0.4 22 May 2020
+#### v0.4: 22 May 2020
 ##### New:
 - /OpenAction and /AA
 ##### Bugfixes
